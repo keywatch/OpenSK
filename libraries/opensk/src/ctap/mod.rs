@@ -80,7 +80,7 @@ use crate::api::persist::{Attestation, AttestationId, Persist};
 use crate::api::private_key::PrivateKey;
 use crate::api::rng::Rng;
 use crate::api::user_presence::{UserPresence, UserPresenceError};
-use crate::env::{EcdsaSk, Env, Hkdf, Sha};
+use crate::env::{EcdsaSk, Env, FidoOperation, FidoUserPresenceRequest, Hkdf, Sha};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -191,6 +191,12 @@ pub fn cbor_read(encoded_cbor: &[u8]) -> CtapResult<cbor::Value> {
 pub fn cbor_write(value: cbor::Value, encoded_cbor: &mut Vec<u8>) -> CtapResult<()> {
     cbor::writer::write_nested(value, encoded_cbor, Some(MAX_CBOR_NESTING_DEPTH))
         .map_err(|_e| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+}
+
+fn wrapped_key_commitment<E: Env>(wrapped_private_key: cbor::Value) -> CtapResult<Vec<u8>> {
+    let mut wrapped = Vec::new();
+    cbor_write(wrapped_private_key, &mut wrapped)?;
+    Ok(Sha::<E>::digest(&wrapped).to_vec())
 }
 
 /// Resets the all state for a CTAP Reset command.
@@ -901,6 +907,15 @@ impl<E: Env> CtapState<E> {
         }
 
         if !self.has_valid_up(has_pin_uv_auth_param, options.uv) {
+            if env.requires_fresh_up_for_fido() {
+                env.prepare_fido_user_presence(FidoUserPresenceRequest {
+                    operation: FidoOperation::MakeCredential,
+                    rp_id: rp_id.clone(),
+                    client_data_hash: client_data_hash.clone(),
+                    key_commitment: None,
+                    consume_count: 1,
+                })?;
+            }
             check_user_presence(env, channel)?;
         }
         self.client_pin.clear_token_flags();
@@ -1295,6 +1310,17 @@ impl<E: Env> CtapState<E> {
 
         // This check comes before CTAP2_ERR_NO_CREDENTIALS in CTAP 2.0.
         if options.up && !self.has_valid_up(has_pin_uv_auth_param, options.uv) {
+            if env.requires_fresh_up_for_fido() {
+                let key_commitment =
+                    wrapped_key_commitment::<E>(credential.wrapped_private_key.clone())?;
+                env.prepare_fido_user_presence(FidoUserPresenceRequest {
+                    operation: FidoOperation::GetAssertion,
+                    rp_id: rp_id.clone(),
+                    client_data_hash: client_data_hash.clone(),
+                    key_commitment: Some(key_commitment),
+                    consume_count: next_credential_keys.len() + 1,
+                })?;
+            }
             check_user_presence(env, channel)?;
             self.client_pin.clear_token_flags();
         }

@@ -27,6 +27,8 @@ use crate::api::persist::Persist;
 use crate::api::rng::Rng;
 use crate::api::user_presence::UserPresence;
 use crate::ctap::Channel;
+use crate::ctap::status_code::Ctap2StatusCode;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
@@ -47,6 +49,21 @@ pub type Ed25519Signature<E> = <<<E as Env>::Crypto as Crypto>::Ed25519 as Ed255
 pub type Sha<E> = <<E as Env>::Crypto as Crypto>::Sha256;
 pub type Hmac<E> = <<E as Env>::Crypto as Crypto>::Hmac256;
 pub type Hkdf<E> = <<E as Env>::Crypto as Crypto>::Hkdf256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FidoOperation {
+    MakeCredential,
+    GetAssertion,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FidoUserPresenceRequest {
+    pub operation: FidoOperation,
+    pub rp_id: String,
+    pub client_data_hash: Vec<u8>,
+    pub key_commitment: Option<Vec<u8>>,
+    pub consume_count: usize,
+}
 
 /// Describes what CTAP needs to function.
 pub trait Env {
@@ -88,6 +105,16 @@ pub trait Env {
     /// Option to return a firmware version that is shown as device info.
     fn firmware_version(&self) -> Option<u64> {
         None
+    }
+
+    fn requires_fresh_up_for_fido(&self) -> bool {
+        false
+    }
+
+    fn prepare_fido_user_presence(
+        &mut self, _request: FidoUserPresenceRequest,
+    ) -> Result<(), Ctap2StatusCode> {
+        Ok(())
     }
 
     /// Option to process a CBOR command before standard parsing.
